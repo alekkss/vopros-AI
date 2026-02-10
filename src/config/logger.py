@@ -30,6 +30,41 @@ def add_app_context(logger: Any, method_name: str, event_dict: EventDict) -> Eve
     return event_dict
 
 
+def suppress_third_party_logs() -> None:
+    """
+    Подавляет все логи от сторонних библиотек.
+    
+    Оставляет только логи нашего приложения (модули с префиксом 'src.').
+    """
+    # Список библиотек для полного подавления
+    libraries_to_silence = [
+        "telethon",
+        "aiogram",
+        "httpx",
+        "httpcore",
+        "asyncio",
+        "aiohttp",
+        "urllib3",
+        "charset_normalizer",
+        "multipart",
+        "telegram",
+        "openai",
+        "httpcore.connection",
+        "httpcore.http11",
+        "httpx._client",
+    ]
+    
+    # Устанавливаем CRITICAL для всех сторонних библиотек
+    # (они будут логировать только критические ошибки)
+    for lib_name in libraries_to_silence:
+        logging.getLogger(lib_name).setLevel(logging.CRITICAL)
+    
+    # Дополнительно подавляем все логгеры, которые не начинаются с 'src.'
+    for name in logging.root.manager.loggerDict:
+        if not name.startswith('src.') and not name.startswith('__main__'):
+            logging.getLogger(name).setLevel(logging.CRITICAL)
+
+
 def configure_logging(
     log_level: str = "INFO",
     log_format: str = "json",
@@ -56,7 +91,7 @@ def configure_logging(
         structlog.contextvars.merge_contextvars,
         structlog.stdlib.add_log_level,
         structlog.stdlib.add_logger_name,
-        structlog.processors.TimeStamper(fmt="iso", utc=True),
+        structlog.processors.TimeStamper(fmt="iso", utc=False),  # Локальное время
         structlog.processors.StackInfoRenderer(),
         add_app_context,
     ]
@@ -68,7 +103,10 @@ def configure_logging(
     else:  # console
         shared_processors.append(structlog.processors.format_exc_info)
         shared_processors.append(structlog.dev.set_exc_info)
-        renderer = structlog.dev.ConsoleRenderer(colors=True)
+        renderer = structlog.dev.ConsoleRenderer(
+            colors=True,
+            exception_formatter=structlog.dev.plain_traceback,
+        )
     
     # Настраиваем structlog
     structlog.configure(
@@ -108,11 +146,8 @@ def configure_logging(
     for handler in handlers:
         root_logger.addHandler(handler)
     
-    # Подавляем излишне многословные логи от сторонних библиотек
-    logging.getLogger("telethon").setLevel(logging.WARNING)
-    logging.getLogger("aiogram").setLevel(logging.WARNING)
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    # Подавляем все логи сторонних библиотек
+    suppress_third_party_logs()
 
 
 def get_logger(name: str) -> structlog.stdlib.BoundLogger:

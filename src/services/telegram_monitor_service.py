@@ -63,6 +63,74 @@ class TelegramMonitorService:
             messages_limit=messages_limit,
         )
     
+    async def validate_chats(self, chat_links: list[str]) -> list[str]:
+        """
+        Проверяет доступность чатов и возвращает только доступные.
+        
+        Args:
+            chat_links: Список ссылок на чаты
+            
+        Returns:
+            Список доступных чатов
+        """
+        valid_chats: list[str] = []
+        
+        print("\n🔍 Проверка доступности чатов...\n")
+        
+        for chat_link in chat_links:
+            try:
+                chat = await self._chat_repository.get_chat_info(chat_link)
+                valid_chats.append(chat_link)
+                print(f"   ✅ {chat.title}")
+                logger.info(
+                    "chat_validated",
+                    chat_link=chat_link,
+                    chat_id=chat.id,
+                    chat_title=chat.title,
+                )
+                
+            except ValueError as e:
+                # Чат не найден
+                print(f"   ❌ Чат не найден: {chat_link}")
+                logger.warning(
+                    "chat_not_found",
+                    chat_link=chat_link,
+                    error=str(e),
+                )
+                
+            except PermissionError as e:
+                # Нет доступа к чату
+                print(f"   ❌ Нет доступа: {chat_link}")
+                logger.warning(
+                    "chat_access_denied",
+                    chat_link=chat_link,
+                    error=str(e),
+                )
+                
+            except Exception as e:
+                # Другие ошибки
+                print(f"   ❌ Ошибка при проверке {chat_link}: {e}")
+                logger.warning(
+                    "chat_validation_error",
+                    chat_link=chat_link,
+                    error=str(e),
+                    error_type=type(e).__name__,
+                )
+        
+        if not valid_chats:
+            print("\n⚠️  Нет доступных чатов для мониторинга!")
+            logger.error("no_valid_chats")
+        else:
+            print(f"\n✅ Доступных чатов: {len(valid_chats)} из {len(chat_links)}\n")
+            logger.info(
+                "chats_validated",
+                total=len(chat_links),
+                valid=len(valid_chats),
+            )
+        
+        return valid_chats
+
+    
     async def process_chat(self, chat_link: str) -> int:
         """
         Обработать один чат: получить сообщения, найти вопросы, отправить в бот.
@@ -76,19 +144,15 @@ class TelegramMonitorService:
         Raises:
             ConnectionError: При проблемах с подключением
             ValueError: Если чат не найден
+            PermissionError: Если нет доступа к чату
         """
-        logger.info("processing_chat_started", chat_link=chat_link)
         
         try:
             # 1. Получаем информацию о чате
             chat = await self._chat_repository.get_chat_info(chat_link)
-            logger.info(
-                "chat_info_retrieved",
-                chat_id=chat.id,
-                chat_title=chat.title,
-            )
+            print(f"📱 Обработка: {chat.title}")
             
-            # 2. Собираем сообщения из чата
+            # 2. Собираем сообщения
             messages: list[tuple[str, dict]] = []
             all_message_texts: list[str] = []
             
@@ -98,76 +162,51 @@ class TelegramMonitorService:
                 messages.append((text, metadata))
                 all_message_texts.append(text)
             
-            logger.info(
-                "messages_collected",
-                chat_id=chat.id,
-                total_messages=len(messages),
-            )
-            
             if not messages:
-                logger.warning("no_messages_found", chat_id=chat.id)
+                print(f"   ⚠️  Нет сообщений")
                 return 0
             
-            # 3. Фильтруем сообщения (базовая фильтрация по регулярным выражениям)
+            # 3. Фильтруем вопросы
             filtered_questions = self._filter_service.filter_questions(messages)
+            print(f"   🔍 Найдено потенциальных вопросов: {len(filtered_questions)}")
             
             if not filtered_questions:
-                logger.info(
-                    "no_questions_after_filter",
-                    chat_id=chat.id,
-                    total_messages=len(messages),
-                )
                 return 0
             
-            # 4. Определяем тематику чата через AI
+            # 4. Определяем тематику через AI
             chat_topic = await self._ai_analyzer.determine_chat_topic(
                 all_message_texts,
                 max_messages=100,
             )
-            logger.info("chat_topic_determined", chat_id=chat.id, topic=chat_topic)
+            topic_preview = chat_topic[:60] + "..." if len(chat_topic) > 60 else chat_topic
+            print(f"   📌 Тема чата: {topic_preview}")
             
-            # 5. Проверяем вопросы на соответствие тематике и уверенность AI
+            # 5. Проверяем вопросы через AI
             suitable_questions: list[tuple[str, dict]] = []
             
             for question_text, metadata in filtered_questions:
-                # Проверяем соответствие тематике
                 is_on_topic = await self._ai_analyzer.is_question_on_topic(
                     question_text, chat_topic
                 )
                 
                 if not is_on_topic:
-                    logger.debug(
-                        "question_not_on_topic",
-                        question_preview=question_text[:50],
-                    )
                     continue
                 
-                # Проверяем уверенность AI
                 can_answer = await self._ai_analyzer.can_answer_confidently(
                     question_text
                 )
                 
                 if not can_answer:
-                    logger.debug(
-                        "ai_not_confident",
-                        question_preview=question_text[:50],
-                    )
                     continue
                 
                 suitable_questions.append((question_text, metadata))
             
-            logger.info(
-                "questions_after_ai_analysis",
-                chat_id=chat.id,
-                suitable_questions=len(suitable_questions),
-                filtered_questions=len(filtered_questions),
-            )
+            print(f"   ✅ Подходящих вопросов после AI: {len(suitable_questions)}")
             
             if not suitable_questions:
-                logger.info("no_suitable_questions", chat_id=chat.id)
                 return 0
             
-            # 6. Отправляем найденные вопросы в бот
+            # 6. Отправляем вопросы в бот
             sent_count = 0
             
             for question_text, metadata in suitable_questions:
@@ -185,20 +224,8 @@ class TelegramMonitorService:
                 
                 if success:
                     sent_count += 1
-                    logger.info(
-                        "question_sent",
-                        chat_id=chat.id,
-                        message_id=question.message_id,
-                        sender=question.sender_name,
-                    )
-                else:
-                    logger.warning(
-                        "question_send_failed",
-                        chat_id=chat.id,
-                        message_id=question.message_id,
-                    )
+                    print(f"   📤 Отправлен вопрос от {question.sender_name}")
                 
-                # Небольшая задержка между отправками
                 await asyncio.sleep(0.5)
             
             logger.info(
@@ -209,6 +236,10 @@ class TelegramMonitorService:
             
             return sent_count
             
+        except (ValueError, PermissionError, ConnectionError):
+            # Пробрасываем эти исключения наверх для обработки
+            raise
+            
         except Exception as e:
             logger.error(
                 "chat_processing_error",
@@ -216,7 +247,8 @@ class TelegramMonitorService:
                 error=str(e),
                 error_type=type(e).__name__,
             )
-            raise
+            # Преобразуем неизвестную ошибку в ConnectionError
+            raise ConnectionError(f"Ошибка обработки чата: {e}") from e
     
     async def monitor_chats(self, chat_links: list[str]) -> dict[str, int]:
         """
@@ -240,11 +272,44 @@ class TelegramMonitorService:
                 questions_count = await self.process_chat(chat_link)
                 results[chat_link] = questions_count
                 
+            except ValueError as e:
+                # Чат не найден - пропускаем
+                print(f"   ⚠️  Чат не найден, пропускаем")
+                logger.warning(
+                    "chat_not_found_skipping",
+                    chat_link=chat_link,
+                    error=str(e),
+                )
+                results[chat_link] = 0
+                
+            except PermissionError as e:
+                # Нет доступа - пропускаем
+                print(f"   ⚠️  Нет доступа к чату, пропускаем")
+                logger.warning(
+                    "chat_access_denied_skipping",
+                    chat_link=chat_link,
+                    error=str(e),
+                )
+                results[chat_link] = 0
+                
+            except ConnectionError as e:
+                # Проблемы с сетью - пропускаем
+                print(f"   ⚠️  Ошибка подключения, пропускаем")
+                logger.warning(
+                    "chat_connection_error_skipping",
+                    chat_link=chat_link,
+                    error=str(e),
+                )
+                results[chat_link] = 0
+                
             except Exception as e:
+                # Любые другие ошибки - пропускаем
+                print(f"   ⚠️  Ошибка обработки, пропускаем: {e}")
                 logger.error(
                     "chat_monitoring_failed",
                     chat_link=chat_link,
                     error=str(e),
+                    error_type=type(e).__name__,
                 )
                 results[chat_link] = 0
             
@@ -270,18 +335,21 @@ class TelegramMonitorService:
         
         Args:
             chat_links: Список ссылок на чаты
-            interval_seconds: Интервал между проверками в секундах
+            interval_seconds: Интервал проверки в секундах
         """
-        logger.info(
-            "continuous_monitoring_started",
-            chats_count=len(chat_links),
-            interval_seconds=interval_seconds,
-        )
+        
+        # Валидируем чаты при старте
+        valid_chats = await self.validate_chats(chat_links)
+        
+        if not valid_chats:
+            logger.error("no_valid_chats_stopping")
+            print("❌ Нет доступных чатов. Остановка мониторинга.")
+            return
         
         # Отправляем уведомление о старте
         start_message = (
             f"🚀 <b>Мониторинг запущен</b>\n\n"
-            f"Отслеживаемых чатов: {len(chat_links)}\n"
+            f"Доступных чатов: {len(valid_chats)}/{len(chat_links)}\n"
             f"Интервал проверки: {interval_seconds // 60} минут\n"
             f"Время запуска: {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}"
         )
@@ -291,13 +359,24 @@ class TelegramMonitorService:
         
         while True:
             iteration += 1
-            logger.info("monitoring_iteration_started", iteration=iteration)
+            print(f"\n{'='*60}")
+            print(f"  Итерация #{iteration} — {datetime.now().strftime('%H:%M:%S')}")
+            print(f"{'='*60}\n")
             
             try:
-                results = await self.monitor_chats(chat_links)
+                # Используем только валидные чаты
+                results = await self.monitor_chats(valid_chats)
                 
-                # Отправляем статистику
+                # Простая статистика
                 total_questions = sum(results.values())
+                print(f"\n✅ Найдено вопросов: {total_questions}")
+                
+                if total_questions > 0:
+                    for chat_link, count in results.items():
+                        if count > 0:
+                            print(f"   • {count} вопросов")
+                
+                # Отправляем статистику в бот
                 stats_message = (
                     f"📊 <b>Итерация #{iteration}</b>\n\n"
                     f"Найдено вопросов: {total_questions}\n"
@@ -312,14 +391,12 @@ class TelegramMonitorService:
                     error=str(e),
                     error_type=type(e).__name__,
                 )
-            
-            logger.info(
-                "monitoring_iteration_completed",
-                iteration=iteration,
-                next_check_in_seconds=interval_seconds,
-            )
+                print(f"❌ Ошибка в итерации #{iteration}: {e}")
             
             # Ожидаем до следующей проверки
+            next_time = datetime.now().timestamp() + interval_seconds
+            next_time_str = datetime.fromtimestamp(next_time).strftime('%H:%M:%S')
+            print(f"\n⏳ Следующая проверка в {next_time_str}")
             await asyncio.sleep(interval_seconds)
 
 
