@@ -8,6 +8,7 @@
 from typing import Final
 
 from aiogram import Bot
+from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramNetworkError
 
@@ -43,7 +44,12 @@ class TelegramBotAdapter:
         """
         self._token = token
         self._chat_id = chat_id
-        self._bot = Bot(token=token, default={"parse_mode": ParseMode.HTML})
+        
+        # Правильная инициализация для aiogram 3.x
+        self._bot = Bot(
+            token=token,
+            default=DefaultBotProperties(parse_mode=ParseMode.HTML)
+        )
         
         logger.info(
             "telegram_bot_adapter_initialized",
@@ -60,12 +66,6 @@ class TelegramBotAdapter:
             
         Returns:
             True если отправка успешна, False в противном случае
-            
-        Example:
-            >>> adapter = TelegramBotAdapter(token="...", chat_id=123)
-            >>> success = await adapter.send_question(question)
-            >>> print(success)
-            True
         """
         try:
             # Форматируем вопрос для отправки
@@ -151,10 +151,6 @@ class TelegramBotAdapter:
             
         Returns:
             True если отправка успешна, False в противном случае
-            
-        Example:
-            >>> await adapter.send_text("Мониторинг запущен")
-            True
         """
         try:
             # Проверяем длину сообщения

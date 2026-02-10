@@ -185,6 +185,7 @@ class TelegramMonitorService:
             suitable_questions: list[tuple[str, dict]] = []
             
             for question_text, metadata in filtered_questions:
+                # Проверка 1: Соответствие тематике
                 is_on_topic = await self._ai_analyzer.is_question_on_topic(
                     question_text, chat_topic
                 )
@@ -192,6 +193,7 @@ class TelegramMonitorService:
                 if not is_on_topic:
                     continue
                 
+                # Проверка 2: Уверенность AI в ответе
                 can_answer = await self._ai_analyzer.can_answer_confidently(
                     question_text
                 )
@@ -199,12 +201,19 @@ class TelegramMonitorService:
                 if not can_answer:
                     continue
                 
+                # НОВАЯ Проверка 3: Потенциальный заказ для Python разработчика
+                is_order = await self._ai_analyzer.is_potential_order(question_text)
+                
+                if not is_order:
+                    logger.debug(
+                        "question_not_potential_order",
+                        question_preview=question_text[:50],
+                    )
+                    continue
+                
                 suitable_questions.append((question_text, metadata))
             
-            print(f"   ✅ Подходящих вопросов после AI: {len(suitable_questions)}")
-            
-            if not suitable_questions:
-                return 0
+            print(f"   ✅ Подходящих вопросов (потенциальные заказы): {len(suitable_questions)}")
             
             # 6. Отправляем вопросы в бот
             sent_count = 0

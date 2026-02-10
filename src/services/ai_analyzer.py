@@ -28,6 +28,35 @@ class AIAnalyzerService:
     - Dependency Inversion: работает через интерфейс OpenAI клиента
     """
     
+    # Промпт для проверки потенциального заказа
+    POTENTIAL_ORDER_PROMPT_TEMPLATE: Final[str] = (
+        "Ты опытный Python разработчик по автоматизации бизнес-процессов. "
+        "Ты ищешь потенциальные заказы на разработку.\n\n"
+        "Вопрос: {question}\n\n"
+        "Является ли этот вопрос потенциальным заказом для Python разработчика?\n\n"
+        "КРИТЕРИИ потенциального заказа:\n"
+        "✅ ДА, если вопрос о:\n"
+        "- Автоматизации рутинных задач (Excel, парсинг, обработка данных)\n"
+        "- Создании ботов (Telegram, Discord, автоответчики)\n"
+        "- Интеграции сервисов (API, маркетплейсы, CRM)\n"
+        "- Парсинге данных (сайты, соцсети, маркетплейсы)\n"
+        "- Создании веб-приложений или скриптов\n"
+        "- Оптимизации или ускорении работы через код\n"
+        "- Работе с базами данных или аналитикой данных\n\n"
+        "❌ НЕТ, если вопрос о:\n"
+        "- Общих вопросах без задачи (\"сколько время?\", \"как дела?\")\n"
+        "- Теоретических вопросах без практической задачи\n"
+        "- Готовых решениях без кастомизации (\"какой сервис использовать?\")\n"
+        "- Вопросах не требующих программирования\n\n"
+        "Ответь ТОЛЬКО 'да' или 'нет'."
+    )
+    
+    # Системный промпт для проверки заказа
+    POTENTIAL_ORDER_SYSTEM_PROMPT: Final[str] = (
+        "Ты Python разработчик, который оценивает потенциальные заказы. "
+        "Будь придирчивым - отвечай 'да' только если задача явно требует программирования. "
+        "Только 'да' или 'нет'."
+    )
     # Промпт для определения тематики чата
     TOPIC_PROMPT_TEMPLATE: Final[str] = (
         "Типичный участник анализирует последние сообщения этого Telegram-чата "
@@ -282,6 +311,65 @@ class AIAnalyzerService:
                 error_type=type(e).__name__,
             )
             return False
+        
+    async def is_potential_order(self, question: str) -> bool:
+        """
+        Проверяет, является ли вопрос потенциальным заказом для Python разработчика.
+        
+        Args:
+            question: Текст вопроса
+            
+        Returns:
+            True если вопрос может быть заказом, False в противном случае
+            
+        Example:
+            >>> is_order = await analyzer.is_potential_order(
+            ...     "Хочу автоматизировать загрузку товаров на Ozon"
+            ... )
+            >>> print(is_order)
+            True
+        """
+        prompt = self.POTENTIAL_ORDER_PROMPT_TEMPLATE.format(question=question.strip())
+        
+        try:
+            logger.debug(
+                "checking_potential_order",
+                question_preview=question[:50],
+            )
+            
+            response = await self._client.chat.completions.create(
+                model=self._model,
+                messages=[
+                    {"role": "system", "content": self.POTENTIAL_ORDER_SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt},
+                ],
+                max_tokens=3,
+                temperature=0,
+            )
+            
+            if response.choices:
+                answer = response.choices[0].message.content.lower()
+                is_order = 'да' in answer
+                
+                logger.info(
+                    "potential_order_checked",
+                    is_order=is_order,
+                    question_preview=question[:50],
+                )
+                
+                return is_order
+            
+            logger.warning("potential_order_empty_response")
+            return False
+            
+        except Exception as e:
+            logger.error(
+                "potential_order_check_error",
+                error=str(e),
+                error_type=type(e).__name__,
+            )
+            return False
+
 
 
 def create_ai_analyzer_from_settings() -> AIAnalyzerService:

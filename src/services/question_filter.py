@@ -162,6 +162,35 @@ class QuestionFilterService:
         
         return True
     
+    def has_links(self, text: str) -> bool:
+        """
+        Проверяет, содержит ли сообщение ссылки.
+        
+        Args:
+            text: Текст сообщения
+            
+        Returns:
+            True если содержит ссылки, False в противном случае
+        """
+        # Паттерны для различных типов ссылок
+        link_patterns = [
+            r'https?://[^\s]+',           # http:// или https://
+            r'www\.[^\s]+',                # www.example.com
+            r't\.me/[^\s]+',               # Telegram ссылки
+            r'@\w+\.\w+',                  # email-подобные
+            r'\w+\.(com|ru|org|net|io|ai|xyz|app)[^\s]*',  # домены
+        ]
+        
+        text_lower = text.lower()
+        
+        for pattern in link_patterns:
+            if re.search(pattern, text_lower):
+                logger.debug("message_has_link", pattern=pattern)
+                return True
+        
+        return False
+
+    
     def is_real_question(self, text: str) -> bool:
         """
         Определяет, является ли сообщение реальным вопросом.
@@ -174,13 +203,6 @@ class QuestionFilterService:
             
         Returns:
             True если сообщение является реальным вопросом
-            
-        Example:
-            >>> filter_service = QuestionFilterService()
-            >>> filter_service.is_real_question("Как настроить Python окружение?")
-            True
-            >>> filter_service.is_real_question("Всем привет!")
-            False
         """
         if not text or not text.strip():
             logger.debug("message_is_empty")
@@ -194,14 +216,14 @@ class QuestionFilterService:
             logger.debug("message_length_invalid", length=len(text_stripped))
             return False
         
+        # НОВОЕ: Проверка на наличие ссылок
+        if self.has_links(text_stripped):
+            logger.debug("message_has_links")
+            return False
+        
         # Проверка на слишком много переносов строк
         if text_stripped.count('\n') > 3:
             logger.debug("message_has_many_newlines", count=text_stripped.count('\n'))
-            return False
-        
-        # Проверка на рекламу
-        if self.is_advertising(text_stripped):
-            logger.debug("message_is_advertising")
             return False
         
         # Проверка на бесполезные вопросы
