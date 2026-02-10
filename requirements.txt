@@ -1,0 +1,12 @@
+# Core dependencies
+python-dotenv>=1.0.0,<2.0.0
+telethon>=1.34.0,<2.0.0
+aiogram>=3.4.0,<4.0.0
+openai>=1.12.0,<2.0.0
+structlog>=24.1.0,<25.0.0
+
+# Development dependencies (optional, for development environment)
+# Install with: pip install -r requirements.txt -r requirements-dev.txt
+
+# Note: For production, install only main dependencies:
+# pip install -r requirements.txt

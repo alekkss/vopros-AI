@@ -82,27 +82,6 @@ class ChatRepositoryFactory:
         logger.debug("telegram_repository_created", session=session_name)
         
         return repository
-    
-    @staticmethod
-    def create_mock_repository() -> BaseChatRepository:
-        """
-        Создать mock-репозиторий для тестирования.
-        
-        Полезно для unit-тестов, когда не нужно реальное
-        подключение к Telegram.
-        
-        Returns:
-            Mock-репозиторий для тестирования
-            
-        Note:
-            Требует реализации MockChatRepository в тестах
-        """
-        logger.info("creating_mock_repository")
-        
-        # Импортируем здесь, чтобы не требовать mock в production
-        from src.repositories.mock_repository import MockChatRepository
-        
-        return MockChatRepository()
 
 
 def create_repository_from_settings() -> BaseChatRepository:
