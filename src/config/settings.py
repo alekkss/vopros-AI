@@ -127,6 +127,15 @@ class Settings:
             "MESSAGES_LIMIT"
         )
         
+        # База данных
+        self.db_path: Path = Path(
+            get_optional_env("DB_PATH", "./data/sent_questions.db")
+        )
+        self.db_cleanup_days: int = self._parse_positive_int(
+            get_optional_env("DB_CLEANUP_DAYS", "30"),
+            "DB_CLEANUP_DAYS"
+        )
+        
         # Логирование
         self.log_level: str = get_optional_env("LOG_LEVEL", "INFO").upper()
         self.log_format: str = get_optional_env("LOG_FORMAT", "json").lower()
@@ -190,7 +199,9 @@ class Settings:
             f"phone={self.telegram_phone}, "
             f"monitored_chats={len(self.monitored_chats)}, "
             f"model={self.openrouter_model}, "
-            f"interval={self.monitoring_interval}s"
+            f"interval={self.monitoring_interval}s, "
+            f"db_path={self.db_path}, "
+            f"db_cleanup_days={self.db_cleanup_days}"
             f")"
         )
 

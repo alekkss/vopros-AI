@@ -14,7 +14,9 @@ from src.adapters.telegram_bot import TelegramBotAdapter
 from src.config.logger import get_logger
 from src.models.chat import Chat
 from src.models.question import Question
+from src.models.sent_question import SentQuestion
 from src.repositories.base import BaseChatRepository
+from src.repositories.sent_question_repository import SentQuestionRepository
 from src.services.ai_analyzer import AIAnalyzerService
 from src.services.question_filter import QuestionFilterService
 
@@ -40,6 +42,7 @@ class TelegramMonitorService:
         bot_adapter: TelegramBotAdapter,
         filter_service: QuestionFilterService,
         ai_analyzer: AIAnalyzerService,
+        sent_question_repository: SentQuestionRepository,
         messages_limit: int = 100,
     ) -> None:
         """
@@ -50,12 +53,14 @@ class TelegramMonitorService:
             bot_adapter: Адаптер для отправки в бот
             filter_service: Сервис фильтрации вопросов
             ai_analyzer: Сервис AI-анализа
+            sent_question_repository: Репозиторий для отслеживания отправленных вопросов
             messages_limit: Количество сообщений для анализа
         """
         self._chat_repository = chat_repository
         self._bot_adapter = bot_adapter
         self._filter_service = filter_service
         self._ai_analyzer = ai_analyzer
+        self._sent_question_repository = sent_question_repository
         self._messages_limit = messages_limit
         
         logger.info(
@@ -192,10 +197,27 @@ class TelegramMonitorService:
             
             print(f"   ✅ Подходящих вопросов (потенциальные заказы): {len(suitable_questions)}")
             
-            # 5. Отправляем вопросы в бот
+            # 5. Проверяем дубликаты и отправляем вопросы в бот
             sent_count = 0
+            duplicate_count = 0
             
             for question_text, metadata in suitable_questions:
+                # Проверяем, не был ли вопрос уже отправлен
+                is_duplicate = self._sent_question_repository.is_already_sent(
+                    chat_id=chat.id,
+                    message_id=metadata['message_id'],
+                )
+                
+                if is_duplicate:
+                    duplicate_count += 1
+                    logger.debug(
+                        "question_already_sent_skipping",
+                        chat_id=chat.id,
+                        message_id=metadata['message_id'],
+                    )
+                    continue
+                
+                # Создаём объект вопроса
                 question = Question(
                     text=question_text,
                     sender_name=metadata['sender_name'],
@@ -206,18 +228,33 @@ class TelegramMonitorService:
                     date=metadata['date'],
                 )
                 
+                # Отправляем в бот
                 success = await self._bot_adapter.send_question(question)
                 
                 if success:
+                    # Помечаем как отправленный в БД
+                    sent_question = SentQuestion(
+                        chat_id=chat.id,
+                        message_id=metadata['message_id'],
+                        question_hash=SentQuestion.compute_hash(question_text),
+                        sent_at=datetime.now(),
+                    )
+                    
+                    self._sent_question_repository.mark_as_sent(sent_question)
+                    
                     sent_count += 1
                     print(f"   📤 Отправлен вопрос от {question.sender_name}")
                 
                 await asyncio.sleep(0.5)
             
+            if duplicate_count > 0:
+                print(f"   ⏭️  Пропущено дубликатов: {duplicate_count}")
+            
             logger.info(
                 "chat_processing_completed",
                 chat_id=chat.id,
                 questions_sent=sent_count,
+                duplicates_skipped=duplicate_count,
             )
             
             return sent_count
@@ -315,6 +352,7 @@ class TelegramMonitorService:
         self,
         chat_links: list[str],
         interval_seconds: int,
+        cleanup_days: int = 30,
     ) -> None:
         """
         Запустить непрерывный мониторинг чатов с заданным интервалом.
@@ -322,6 +360,7 @@ class TelegramMonitorService:
         Args:
             chat_links: Список ссылок на чаты
             interval_seconds: Интервал проверки в секундах
+            cleanup_days: Количество дней хранения записей в БД
         """
         
         # Валидируем чаты при старте
@@ -332,11 +371,16 @@ class TelegramMonitorService:
             print("❌ Нет доступных чатов. Остановка мониторинга.")
             return
         
+        # Получаем статистику БД
+        db_stats = self._sent_question_repository.get_statistics()
+        
         # Отправляем уведомление о старте
         start_message = (
             f"🚀 <b>Мониторинг запущен</b>\n\n"
             f"Доступных чатов: {len(valid_chats)}/{len(chat_links)}\n"
             f"Интервал проверки: {interval_seconds // 60} минут\n"
+            f"Хранение записей: {cleanup_days} дней\n"
+            f"Отправлено ранее: {db_stats['total']} вопросов\n"
             f"Время запуска: {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}"
         )
         await self._bot_adapter.send_text(start_message)
@@ -361,6 +405,19 @@ class TelegramMonitorService:
                     for chat_link, count in results.items():
                         if count > 0:
                             print(f"   • {count} вопросов")
+                
+                # Периодическая очистка БД (каждые 10 итераций)
+                if iteration % 10 == 0:
+                    deleted_count = self._sent_question_repository.cleanup_old_records(
+                        days_to_keep=cleanup_days
+                    )
+                    if deleted_count > 0:
+                        print(f"   🗑️  Очищено старых записей: {deleted_count}")
+                        logger.info(
+                            "database_cleanup_performed",
+                            deleted_count=deleted_count,
+                            iteration=iteration,
+                        )
                 
                 # Отправляем статистику в бот
                 stats_message = (
@@ -406,6 +463,9 @@ def create_monitor_service_from_settings(
         >>> monitor = create_monitor_service_from_settings(repository, bot)
     """
     from src.config.settings import get_settings
+    from src.repositories.sent_question_repository import (
+        create_sent_question_repository_from_settings,
+    )
     
     settings = get_settings()
     
@@ -417,11 +477,13 @@ def create_monitor_service_from_settings(
         api_key=settings.openrouter_api_key,
         model=settings.openrouter_model,
     )
+    sent_question_repository = create_sent_question_repository_from_settings()
     
     return TelegramMonitorService(
         chat_repository=chat_repository,
         bot_adapter=bot_adapter,
         filter_service=filter_service,
         ai_analyzer=ai_analyzer,
+        sent_question_repository=sent_question_repository,
         messages_limit=settings.messages_limit,
     )
