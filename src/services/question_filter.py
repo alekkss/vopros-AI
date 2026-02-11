@@ -77,14 +77,6 @@ class QuestionFilterService:
         r'^(класс|понятно|ясно|спасибо).{,12}$',
     ]
     
-    # Паттерны для расплывчатых ссылок
-    VAGUE_REFERENCES: Final[list[str]] = [
-        r'этой? штук[иеа]', r'эт[уо].*штук[иеа]', r'эт[уо].*вещ[ьи]',
-        r'эт[уо].*сервис', r'эт[уо].*сайт', r'эт[уо].*прог[ау]',
-        r'данную.*штук[уи]', r'такую.*штук[уи]',
-        r'кто.*тестил.*\?$', r'кто.*пробовал.*\?$',
-    ]
-    
     def __init__(self) -> None:
         """Инициализация сервиса фильтрации."""
         logger.info("question_filter_service_initialized")
@@ -142,26 +134,6 @@ class QuestionFilterService:
         
         return False
     
-    def has_sufficient_context(self, text: str) -> bool:
-        """
-        Проверяет, достаточно ли контекста в вопросе.
-        
-        Args:
-            text: Текст сообщения
-            
-        Returns:
-            True если контекст достаточный, False в противном случае
-        """
-        text_lower = text.lower()
-        
-        # Проверка на расплывчатые ссылки
-        for pattern in self.VAGUE_REFERENCES:
-            if re.search(pattern, text_lower):
-                logger.debug("message_has_vague_reference", pattern=pattern)
-                return False
-        
-        return True
-    
     def has_links(self, text: str) -> bool:
         """
         Проверяет, содержит ли сообщение ссылки.
@@ -216,7 +188,7 @@ class QuestionFilterService:
             logger.debug("message_length_invalid", length=len(text_stripped))
             return False
         
-        # НОВОЕ: Проверка на наличие ссылок
+        # Проверка на наличие ссылок
         if self.has_links(text_stripped):
             logger.debug("message_has_links")
             return False
@@ -291,7 +263,7 @@ class QuestionFilterService:
         questions = []
         
         for text, metadata in messages:
-            if self.is_real_question(text) and self.has_sufficient_context(text):
+            if self.is_real_question(text):
                 questions.append((text, metadata))
         
         logger.info(

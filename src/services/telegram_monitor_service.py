@@ -154,68 +154,45 @@ class TelegramMonitorService:
             
             # 2. Собираем сообщения
             messages: list[tuple[str, dict]] = []
-            all_message_texts: list[str] = []
             
             async for text, metadata in self._chat_repository.get_recent_messages(
                 chat, limit=self._messages_limit
             ):
                 messages.append((text, metadata))
-                all_message_texts.append(text)
             
             if not messages:
                 print(f"   ⚠️  Нет сообщений")
                 return 0
             
-            # 3. Фильтруем вопросы
+            # 3. Фильтруем вопросы через regex
             filtered_questions = self._filter_service.filter_questions(messages)
             print(f"   🔍 Найдено потенциальных вопросов: {len(filtered_questions)}")
             
             if not filtered_questions:
                 return 0
             
-            # 4. Определяем тематику через AI
-            chat_topic = await self._ai_analyzer.determine_chat_topic(
-                all_message_texts,
-                max_messages=100,
-            )
-            topic_preview = chat_topic[:60] + "..." if len(chat_topic) > 60 else chat_topic
-            print(f"   📌 Тема чата: {topic_preview}")
-            
-            # 5. Проверяем вопросы через AI
+            # 4. Проверяем вопросы через AI - только проверка на потенциальный заказ
             suitable_questions: list[tuple[str, dict]] = []
             
             for question_text, metadata in filtered_questions:
-                # Проверка 1: Соответствие тематике
-                is_on_topic = await self._ai_analyzer.is_question_on_topic(
-                    question_text, chat_topic
-                )
-                
-                if not is_on_topic:
-                    continue
-                
-                # Проверка 2: Уверенность AI в ответе
-                can_answer = await self._ai_analyzer.can_answer_confidently(
-                    question_text
-                )
-                
-                if not can_answer:
-                    continue
-                
-                # НОВАЯ Проверка 3: Потенциальный заказ для Python разработчика
+                # Единственная AI-проверка: является ли это потенциальным заказом?
                 is_order = await self._ai_analyzer.is_potential_order(question_text)
                 
-                if not is_order:
+                if is_order:
+                    suitable_questions.append((question_text, metadata))
+                    logger.debug(
+                        "question_is_potential_order",
+                        question_preview=question_text[:50],
+                    )
+                else:
                     logger.debug(
                         "question_not_potential_order",
                         question_preview=question_text[:50],
                     )
-                    continue
-                
-                suitable_questions.append((question_text, metadata))
             
             print(f"   ✅ Подходящих вопросов (потенциальные заказы): {len(suitable_questions)}")
             
-            # 6. Отправляем вопросы в бот
+            # 5. Отправляем вопросы в бот
             sent_count = 0
             
             for question_text, metadata in suitable_questions:
